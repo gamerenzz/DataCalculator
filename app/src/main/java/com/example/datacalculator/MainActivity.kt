@@ -46,7 +46,7 @@ fun DataCalculatorScreen() {
     // 本地存储读取器
     val prefs = remember { context.getSharedPreferences("data_calc_prefs", Context.MODE_PRIVATE) }
 
-    // 1. 读取保存的设置（若第一次打开，则使用默认值）
+    // 读取保存的数据
     var totalPlan by remember { mutableStateOf(prefs.getString("totalPlan", "400") ?: "400") }
     var currentRemaining by remember { mutableStateOf(prefs.getString("currentRemaining", "240") ?: "240") }
 
@@ -69,7 +69,7 @@ fun DataCalculatorScreen() {
 
     val rules = remember { mutableStateListOf<UsageRule>().apply { addAll(initialRules) } }
 
-    // 自动保存逻辑（只要数据改变就自动保存到手机磁盘）
+    // 自动保存逻辑
     LaunchedEffect(totalPlan, currentRemaining, rules.toList()) {
         val rulesDataStr = rules.joinToString("|") { "${it.days}:${it.gbPerDay}" }
         prefs.edit()
@@ -79,13 +79,19 @@ fun DataCalculatorScreen() {
             .apply()
     }
 
-    // 计算逻辑
+    // --- 完整核心计算逻辑 ---
     val totalPlanNum = totalPlan.toDoubleOrNull() ?: 0.0
     val currentRemainingNum = currentRemaining.toDoubleOrNull() ?: 0.0
     val totalPlannedUsage = rules.sumOf { (it.days.toDoubleOrNull() ?: 0.0) * (it.gbPerDay.toDoubleOrNull() ?: 0.0) }
-    
-    // 月底最终剩余 = 当前剩余 - 规划消耗
+
+    // 1. 过去已用流量 = 套餐总量 - 当前剩余
+    val alreadyUsed = (totalPlanNum - currentRemainingNum).coerceAtLeast(0.0)
+    // 2. 全月预估用量 = 过去已用 + 后续规划
+    val estimatedTotalUsed = alreadyUsed + totalPlannedUsage
+    // 3. 月底结余 = 当前剩余 - 后续规划
     val finalBalance = currentRemainingNum - totalPlannedUsage
+    // 4. 整体进度 (全月预估总用量 / 月套餐总量)
+    val progress = if (totalPlanNum > 0) (estimatedTotalUsed / totalPlanNum).toFloat() else 1f
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("流量精算师", fontWeight = FontWeight.Bold) }) }
@@ -97,7 +103,7 @@ fun DataCalculatorScreen() {
                 .fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 1. 结果概览卡片
+            // 1. 结果概览卡片 ( Dashboard )
             item {
                 Card(
                     colors = CardDefaults.cardColors(
@@ -108,13 +114,20 @@ fun DataCalculatorScreen() {
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text(
-                            text = "规划消耗: ${String.format("%.1f", totalPlannedUsage)} GB / 当前剩余: ${String.format("%.1f", currentRemainingNum)} GB", 
-                            fontSize = 15.sp
+                            text = "全月预估用量: ${String.format("%.1f", estimatedTotalUsed)} GB / 套餐: ${String.format("%.1f", totalPlanNum)} GB", 
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        Text(
+                            text = "(已用 ${String.format("%.1f", alreadyUsed)} GB + 后续规划 ${String.format("%.1f", totalPlannedUsage)} GB)", 
+                            fontSize = 12.sp,
+                            color = Color.Gray
+                        )
+                        
+                        Spacer(modifier = Modifier.height(10.dp))
 
-                        // 进度条（规划消耗量 占 当前剩余流量 的比例）
-                        val progress = if (currentRemainingNum > 0) (totalPlannedUsage / currentRemainingNum).toFloat() else 1f
+                        // 全月百分比进度条
                         LinearProgressIndicator(
                             progress = progress.coerceIn(0f, 1f),
                             modifier = Modifier.fillMaxWidth().height(8.dp),
@@ -122,6 +135,7 @@ fun DataCalculatorScreen() {
                         )
 
                         Spacer(modifier = Modifier.height(12.dp))
+                        
                         if (finalBalance >= 0) {
                             Text(
                                 text = "月底预估还剩: ${String.format("%.1f", finalBalance)} GB", 
@@ -145,7 +159,7 @@ fun DataCalculatorScreen() {
             item {
                 Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("基础数据", fontWeight = FontWeight.Bold)
+                        Text("基础数据设置", fontWeight = FontWeight.Bold)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
                                 value = totalPlan, 
