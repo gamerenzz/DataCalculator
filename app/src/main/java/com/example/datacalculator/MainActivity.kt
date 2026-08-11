@@ -19,9 +19,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.text.SimpleDateFormat
+import java.util.*
 
 // 规划规则数据类
-data class UsageRule(var days: String, var gbPerDay: String)
+data class UsageRule(var days: String, var gbPerDay: String, var label: String = "")
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -43,12 +45,15 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun DataCalculatorScreen() {
     val context = LocalContext.current
-    // 本地存储读取器
     val prefs = remember { context.getSharedPreferences("data_calc_prefs", Context.MODE_PRIVATE) }
 
-    // 读取保存的数据
+    // 1. 读取保存的设置
     var totalPlan by remember { mutableStateOf(prefs.getString("totalPlan", "400") ?: "400") }
     var currentRemaining by remember { mutableStateOf(prefs.getString("currentRemaining", "240") ?: "240") }
+    
+    // 默认工作日/休息日流量设定
+    var defaultWorkdayGb by remember { mutableStateOf(prefs.getString("defaultWorkdayGb", "6") ?: "6") }
+    var defaultWeekendGb by remember { mutableStateOf(prefs.getString("defaultWeekendGb", "16") ?: "16") }
 
     // 读取保存的规则列表
     val initialRules = remember {
@@ -57,40 +62,77 @@ fun DataCalculatorScreen() {
             try {
                 savedRules.split("|").map {
                     val parts = it.split(":")
-                    UsageRule(parts[0], parts[1])
+                    UsageRule(parts[0], parts[1], if (parts.size > 2) parts[2] else "")
                 }.toMutableList()
             } catch (e: Exception) {
-                mutableListOf(UsageRule("24", "6"), UsageRule("6", "16"))
+                mutableListOf(UsageRule("15", "6", "工作日"), UsageRule("6", "16", "周末/节假日"))
             }
         } else {
-            mutableListOf(UsageRule("24", "6"), UsageRule("6", "16"))
+            mutableListOf(UsageRule("15", "6", "工作日"), UsageRule("6", "16", "周末/节假日"))
         }
     }
 
     val rules = remember { mutableStateListOf<UsageRule>().apply { addAll(initialRules) } }
 
     // 自动保存逻辑
-    LaunchedEffect(totalPlan, currentRemaining, rules.toList()) {
-        val rulesDataStr = rules.joinToString("|") { "${it.days}:${it.gbPerDay}" }
+    LaunchedEffect(totalPlan, currentRemaining, defaultWorkdayGb, defaultWeekendGb, rules.toList()) {
+        val rulesDataStr = rules.joinToString("|") { "${it.days}:${it.gbPerDay}:${it.label}" }
         prefs.edit()
             .putString("totalPlan", totalPlan)
             .putString("currentRemaining", currentRemaining)
+            .putString("defaultWorkdayGb", defaultWorkdayGb)
+            .putString("defaultWeekendGb", defaultWeekendGb)
             .putString("rulesData", rulesDataStr)
             .apply()
     }
 
-    // --- 完整核心计算逻辑 ---
+    // --- 日期与天数智能计算逻辑 ---
+    val todayCal = Calendar.getInstance()
+    val dateFormat = SimpleDateFormat("yyyy年MM月dd日", Locale.CHINA)
+    val todayStr = dateFormat.format(todayCal.time)
+    
+    // 计算当月剩余的工作日和周末天数
+    fun calculateRemainingDays(): Pair<Int, Int> {
+        val cal = Calendar.getInstance()
+        val todayDay = cal.get(Calendar.DAY_OF_MONTH)
+        val maxDays = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+        
+        var workdays = 0
+        var weekends = 0
+        
+        for (day in todayDay..maxDays) {
+            cal.set(Calendar.DAY_OF_MONTH, day)
+            val dayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
+            if (dayOfWeek == Calendar.SATURDAY || dayOfWeek == Calendar.SUNDAY) {
+                weekends++
+            } else {
+                workdays++
+            }
+        }
+        return Pair(workdays, weekends)
+    }
+
+    val (remainingWorkdays, remainingWeekends) = remember(todayStr) { calculateRemainingDays() }
+
+    // 一键生成智能规划函数
+    fun applySmartPlanning() {
+        rules.clear()
+        if (remainingWorkdays > 0) {
+            rules.add(UsageRule(remainingWorkdays.toString(), defaultWorkdayGb, "工作日"))
+        }
+        if (remainingWeekends > 0) {
+            rules.add(UsageRule(remainingWeekends.toString(), defaultWeekendGb, "周末/节假日"))
+        }
+    }
+
+    // --- 核心流量计算 ---
     val totalPlanNum = totalPlan.toDoubleOrNull() ?: 0.0
     val currentRemainingNum = currentRemaining.toDoubleOrNull() ?: 0.0
     val totalPlannedUsage = rules.sumOf { (it.days.toDoubleOrNull() ?: 0.0) * (it.gbPerDay.toDoubleOrNull() ?: 0.0) }
 
-    // 1. 过去已用流量 = 套餐总量 - 当前剩余
     val alreadyUsed = (totalPlanNum - currentRemainingNum).coerceAtLeast(0.0)
-    // 2. 全月预估用量 = 过去已用 + 后续规划
     val estimatedTotalUsed = alreadyUsed + totalPlannedUsage
-    // 3. 月底结余 = 当前剩余 - 后续规划
     val finalBalance = currentRemainingNum - totalPlannedUsage
-    // 4. 整体进度 (全月预估总用量 / 月套餐总量)
     val progress = if (totalPlanNum > 0) (estimatedTotalUsed / totalPlanNum).toFloat() else 1f
 
     Scaffold(
@@ -127,7 +169,6 @@ fun DataCalculatorScreen() {
                         
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // 全月百分比进度条
                         LinearProgressIndicator(
                             progress = progress.coerceIn(0f, 1f),
                             modifier = Modifier.fillMaxWidth().height(8.dp),
@@ -155,40 +196,75 @@ fun DataCalculatorScreen() {
                 }
             }
 
-            // 2. 基础数据设置
+            // 2. 基础数据与智能配置
             item {
                 Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("基础数据设置", fontWeight = FontWeight.Bold)
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("基础数据与每日额度设定", fontWeight = FontWeight.Bold)
+                        
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
                                 value = totalPlan, 
                                 onValueChange = { totalPlan = it },
-                                label = { Text("月套餐总量(GB)") }, 
+                                label = { Text("月套餐(GB)") }, 
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 modifier = Modifier.weight(1f)
                             )
                             OutlinedTextField(
                                 value = currentRemaining, 
                                 onValueChange = { currentRemaining = it },
-                                label = { Text("当前剩余流量(GB)") }, 
+                                label = { Text("当前剩余(GB)") }, 
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 modifier = Modifier.weight(1f)
                             )
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = defaultWorkdayGb, 
+                                onValueChange = { defaultWorkdayGb = it },
+                                label = { Text("工作日用量(GB/天)") }, 
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedTextField(
+                                value = defaultWeekendGb, 
+                                onValueChange = { defaultWeekendGb = it },
+                                label = { Text("周末用量(GB/天)") }, 
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        Divider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        // 智能计算信息展示
+                        Text(
+                            text = "今天是 $todayStr\n本月包含今天还剩: $remainingWorkdays 个工作日，$remainingWeekends 个周末",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+
+                        Button(
+                            onClick = { applySmartPlanning() },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Text("⚡ 一键根据本月剩余天数生成规划")
                         }
                     }
                 }
             }
 
-            // 3. 动态规划规则
+            // 3. 动态规划规则列表
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(), 
                     horizontalArrangement = Arrangement.SpaceBetween, 
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("后续使用规划 (天数 x 每天GB)", fontWeight = FontWeight.Bold)
-                    Button(onClick = { rules.add(UsageRule("1", "5")) }) { Text("添加规则") }
+                    Text("后续使用规划规则", fontWeight = FontWeight.Bold)
+                    Button(onClick = { rules.add(UsageRule("1", "5", "自定义")) }) { Text("手动加一条") }
                 }
             }
 
@@ -199,21 +275,23 @@ fun DataCalculatorScreen() {
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        OutlinedTextField(
-                            value = rule.days, 
-                            onValueChange = { rules[index] = rule.copy(days = it) },
-                            label = { Text("天数") }, 
-                            modifier = Modifier.weight(1f),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
+                        Column(modifier = Modifier.weight(1.2f)) {
+                            OutlinedTextField(
+                                value = rule.days, 
+                                onValueChange = { rules[index] = rule.copy(days = it) },
+                                label = { Text(if (rule.label.isNotEmpty()) "天数(${rule.label})" else "天数") }, 
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            )
+                        }
                         Text("天, 每天")
-                        OutlinedTextField(
-                            value = rule.gbPerDay, 
-                            onValueChange = { rules[index] = rule.copy(gbPerDay = it) },
-                            label = { Text("GB") }, 
-                            modifier = Modifier.weight(1f),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            OutlinedTextField(
+                                value = rule.gbPerDay, 
+                                onValueChange = { rules[index] = rule.copy(gbPerDay = it) },
+                                label = { Text("GB") }, 
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            )
+                        }
                         IconButton(onClick = { if (rules.size > 1) rules.removeAt(index) }) {
                             Text("❌")
                         }
