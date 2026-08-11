@@ -1,0 +1,21 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    
+    <!-- 背景圆形（绿色） -->
+    <path
+        android:fillColor="#2E7D32"
+        android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2z"/>
+
+    <!-- 内部流量柱状图（白色） -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M7,13h2v4H7zM11,9h2v8h-2zM15,12h2v5h-2z"/>
+        
+    <!-- 信号波浪曲线 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M16.5,8c0.83,0 1.5,-0.67 1.5,-1.5S17.33,5 16.5,5 15,5.67 15,6.5 15.67,8 16.5,8z"/>
+</vector>
